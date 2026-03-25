@@ -76,6 +76,7 @@
   <div class="row"><span class="label">Безопасность</span> <span class="value" id="s-vl53">—</span></div>
   <div class="row"><span class="label">WiFi</span>         <span class="value" id="s-wifi">—</span></div>
   <div class="row"><span class="label">MQTT</span>         <span class="value" id="s-mqtt">—</span></div>
+  <div class="row"><span class="label">Heap free</span>    <span class="value" id="s-cpu">—</span></div>
   <div class="row"><span class="label">Uptime</span>       <span class="value" id="s-uptime">—</span></div>
 </div>
 
@@ -172,7 +173,11 @@ function onStatus(e) {
     set('s-wifi', d.wifi || '—', wifiOk ? 'ok' : d.wifi === 'подключение...' ? 'warn' : 'err');
     const mqttOk = d.mqtt === 'подключён';
     set('s-mqtt', d.mqtt || '—', mqttOk ? 'ok' : d.mqtt === 'выключен' ? '' : 'err');
-    set('s-uptime', d.uptime !== undefined ? fmtUptime(d.uptime) : '—');
+    const heap = d.heap !== undefined ? d.heap : null;
+    const heapMin = d.heap_min !== undefined ? d.heap_min : null;
+    const heapCls = heap === null ? '' : heap > 100 ? 'ok' : heap > 50 ? 'warn' : 'err';
+    set('s-cpu', heap !== null ? heap + ' KB  (min ' + heapMin + ' KB)' : '—', heapCls);
+    set('s-uptime', d.uptime !== undefined ? fmtUptime(d.uptime * 1000) : '—');
   } catch(e) { log('Ошибка парсинга статуса: ' + e.message, 'l-err'); }
 }
 

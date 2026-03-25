@@ -49,6 +49,7 @@ bool vl53ok     = false;
 bool vl53Failed = false;
 bool ld2410Failed = false;
 
+
 // Кэш настроек (loop пишет, sensorTask читает)
 volatile uint16_t cfg_vl53Threshold  = 500;
 volatile uint16_t cfg_approachDelta  = 15;
@@ -258,6 +259,9 @@ String buildStatusJson() {
     doc["vl53"]     = snap.vl53dist;
     doc["ld_ok"]    = !ld2410Failed;
     doc["vl53_ok"]  = vl53ok && !vl53Failed;
+    doc["heap"]     = esp_get_free_heap_size() / 1024;      // KB сейчас
+    doc["heap_min"] = esp_get_minimum_free_heap_size() / 1024; // KB минимум с старта
+    doc["uptime"]   = millis() / 1000;
     // WiFi: IP / статус
     if (wifiMgr.connected())
         doc["wifi"] = WiFi.localIP().toString();
