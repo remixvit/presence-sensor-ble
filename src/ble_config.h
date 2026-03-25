@@ -67,7 +67,14 @@ public:
 
         NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
         adv->addServiceUUID(BLE_SVC_UUID);
-        adv->setName(deviceName);  // имя в advertisement, не только в scan response
+        adv->setName(deviceName);
+
+        // Manufacturer Specific Data: company=0xFFFF (test), marker='P','S'
+        // Приложение фильтрует устройства по этой сигнатуре
+        NimBLEAdvertisementData scanResp;
+        uint8_t mfr[4] = {0xFF, 0xFF, 'P', 'S'};
+        scanResp.setManufacturerData(std::string((char*)mfr, sizeof(mfr)));
+        adv->setScanResponseData(scanResp);
         adv->enableScanResponse(true);
         adv->start();
 
@@ -96,6 +103,10 @@ public:
         adv->stop();
         NimBLEDevice::setDeviceName(name);
         adv->setName(name);
+        NimBLEAdvertisementData scanResp;
+        uint8_t mfr[4] = {0xFF, 0xFF, 'P', 'S'};
+        scanResp.setManufacturerData(std::string((char*)mfr, sizeof(mfr)));
+        adv->setScanResponseData(scanResp);
         adv->start();
         Serial.printf("[BLE] Имя изменено: '%s'\n", name);
     }
