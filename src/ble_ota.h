@@ -60,8 +60,16 @@ public:
 
     bool isActive() const { return _active; }
 
-    // Вызывать из loop() для отложенной перезагрузки
+    // Вызывать из loop() — flash-операции здесь безопасны
     void loop() {
+        if (_pendingStart) {
+            _pendingStart = false;
+            _doBegin();
+        }
+        if (_pendingFinish) {
+            _pendingFinish = false;
+            _doFinish();
+        }
         if (_rebootAt && millis() >= _rebootAt) {
             esp_restart();
         }
@@ -74,7 +82,9 @@ private:
 
     esp_ota_handle_t _otaHandle = 0;
     const esp_partition_t* _otaPartition = nullptr;
-    bool     _active    = false;
+    bool     _active         = false;
+    bool     _pendingStart   = false;  // флаг: начать OTA в loop(), не в callback
+    bool     _pendingFinish  = false;  // флаг: завершить OTA в loop()
     uint32_t _total     = 0;
     uint32_t _written   = 0;
     unsigned long _rebootAt = 0;
@@ -102,25 +112,26 @@ private:
         if (!cmd) return;
 
         if (strcmp(cmd, "start") == 0) {
-            _start(doc["size"].as<uint32_t>());
+            // Только сохраняем параметры — esp_ota_begin() вызовем в loop()
+            if (_active) { esp_ota_abort(_otaHandle); _active = false; }
+            _total         = doc["size"].as<uint32_t>();
+            _written       = 0;
+            _pendingStart  = true;
         } else if (strcmp(cmd, "end") == 0) {
-            _finish();
+            // esp_ota_end() тоже вызовем из loop()
+            _pendingFinish = true;
         } else if (strcmp(cmd, "abort") == 0) {
             _abort("aborted");
         }
     }
 
-    void _start(uint32_t size) {
-        if (_active) {
-            esp_ota_abort(_otaHandle);
-            _active = false;
-        }
-        if (size == 0) { _notify("error", "size=0"); return; }
+    void _doBegin() {
+        if (_total == 0) { _notify("error", "size=0"); return; }
 
         _otaPartition = esp_ota_get_next_update_partition(nullptr);
         if (!_otaPartition) { _notify("error", "no ota partition"); return; }
 
-        esp_err_t err = esp_ota_begin(_otaPartition, size, &_otaHandle);
+        esp_err_t err = esp_ota_begin(_otaPartition, OTA_SIZE_UNKNOWN, &_otaHandle);
         if (err != ESP_OK) {
             char buf[48];
             snprintf(buf, sizeof(buf), "ota_begin: %d", err);
@@ -128,31 +139,13 @@ private:
             return;
         }
 
-        _total   = size;
-        _written = 0;
-        _active  = true;
+        _active = true;
         _notify("ready");
+        Serial.printf("[OTA] Начало: партиция %s, ожидаем %u байт\n",
+                      _otaPartition->label, _total);
     }
 
-    void _onData(const uint8_t* data, size_t len) {
-        if (!_active) return;
-
-        esp_err_t err = esp_ota_write(_otaHandle, data, len);
-        if (err != ESP_OK) {
-            char buf[48];
-            snprintf(buf, sizeof(buf), "ota_write: %d", err);
-            _abort(buf);
-            return;
-        }
-        _written += len;
-
-        // Уведомляем каждые ~8KB чтобы не флудить
-        if ((_written % (8 * 1024)) < (uint32_t)len || _written == _total) {
-            _notify("progress");
-        }
-    }
-
-    void _finish() {
+    void _doFinish() {
         if (!_active) { _notify("error", "not started"); return; }
 
         esp_err_t err = esp_ota_end(_otaHandle);
@@ -173,9 +166,28 @@ private:
 
         _active = false;
         _notify("done");
-        _rebootAt = millis() + 1500;  // перезагрузка через 1.5с
+        _rebootAt = millis() + 1500;
         Serial.println("[OTA] Прошивка OK, перезагрузка...");
     }
+
+    void _onData(const uint8_t* data, size_t len) {
+        if (!_active) return;
+
+        esp_err_t err = esp_ota_write(_otaHandle, data, len);
+        if (err != ESP_OK) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "ota_write: %d", err);
+            _abort(buf);
+            return;
+        }
+        _written += len;
+
+        // Уведомляем каждые ~8KB чтобы не флудить
+        if ((_written % (8 * 1024)) < (uint32_t)len || _written == _total) {
+            _notify("progress");
+        }
+    }
+
 
     void _abort(const char* reason) {
         if (_active) esp_ota_abort(_otaHandle);

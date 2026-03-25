@@ -16,7 +16,7 @@
 #include "ble_config.h"
 #include "ble_ota.h"
 
-#define FW_VERSION    "1.1.0"
+#define FW_VERSION    "1.3.0"
 #define DEVICE_MODEL  "presence-c3-v1"
 
 // ============================================================

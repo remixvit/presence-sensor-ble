@@ -65,15 +65,18 @@ public:
         // Дополнительные сервисы (OTA и др.) — до старта рекламы
         if (extraSetup) extraSetup(_server);
 
-        NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-        adv->addServiceUUID(BLE_SVC_UUID);
-        adv->setName(deviceName);
-
         // Manufacturer Specific Data: company=0xFFFF (test), marker='P','S'
-        // Приложение фильтрует устройства по этой сигнатуре
-        NimBLEAdvertisementData scanResp;
+        // Кладём в основной пакет вместе с service UUID
         uint8_t mfr[4] = {0xFF, 0xFF, 'P', 'S'};
-        scanResp.setManufacturerData(std::string((char*)mfr, sizeof(mfr)));
+        NimBLEAdvertisementData advData;
+        advData.addServiceUUID(BLE_SVC_UUID);
+        advData.setManufacturerData(std::string((char*)mfr, sizeof(mfr)));
+
+        NimBLEAdvertisementData scanResp;
+        scanResp.setName(deviceName);
+
+        NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+        adv->setAdvertisementData(advData);
         adv->setScanResponseData(scanResp);
         adv->enableScanResponse(true);
         adv->start();
@@ -102,10 +105,16 @@ public:
         NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
         adv->stop();
         NimBLEDevice::setDeviceName(name);
-        adv->setName(name);
-        NimBLEAdvertisementData scanResp;
+
         uint8_t mfr[4] = {0xFF, 0xFF, 'P', 'S'};
-        scanResp.setManufacturerData(std::string((char*)mfr, sizeof(mfr)));
+        NimBLEAdvertisementData advData;
+        advData.addServiceUUID(BLE_SVC_UUID);
+        advData.setManufacturerData(std::string((char*)mfr, sizeof(mfr)));
+
+        NimBLEAdvertisementData scanResp;
+        scanResp.setName(name);
+
+        adv->setAdvertisementData(advData);
         adv->setScanResponseData(scanResp);
         adv->start();
         Serial.printf("[BLE] Имя изменено: '%s'\n", name);
