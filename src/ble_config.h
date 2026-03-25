@@ -34,6 +34,7 @@ public:
 
         NimBLEDevice::init(deviceName);
         NimBLEDevice::setPower(ESP_PWR_LVL_P3);  // +3dBm — разумный компромисс
+        NimBLEDevice::setMTU(512);               // до 509 байт полезной нагрузки
 
         _server = NimBLEDevice::createServer();
         _server->setCallbacks(&_serverCb);
