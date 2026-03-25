@@ -14,6 +14,10 @@
 #include "door_logic.h"
 #include "wifi_manager.h"
 #include "ble_config.h"
+#include "ble_ota.h"
+
+#define FW_VERSION    "1.1.0"
+#define DEVICE_MODEL  "presence-c3-v1"
 
 // ============================================================
 //  Глобальные объекты
@@ -249,6 +253,18 @@ String buildSettingsJson() {
 // ============================================================
 String buildStatusJson() {
     JsonDocument doc;
+    // Идентификация устройства
+    doc["model"]  = DEVICE_MODEL;
+    doc["fw"]     = FW_VERSION;
+    // Capabilities — приложение адаптирует UI под конкретную модель
+    JsonArray caps = doc["caps"].to<JsonArray>();
+    caps.add("ld2410");
+    if (vl53ok) caps.add("vl53");
+    caps.add("activator");
+    if ((bool)db[kk::wifi_enabled] || true) caps.add("wifi");   // всегда поддерживается
+    caps.add("mqtt");
+    caps.add("ota_ble");
+
     doc["presence"] = snap.presence;
     doc["dist"]     = snap.movingDist ? snap.movingDist : snap.staticDist;
     doc["moving"]   = snap.isMoving;
@@ -259,8 +275,8 @@ String buildStatusJson() {
     doc["vl53"]     = snap.vl53dist;
     doc["ld_ok"]    = !ld2410Failed;
     doc["vl53_ok"]  = vl53ok && !vl53Failed;
-    doc["heap"]     = esp_get_free_heap_size() / 1024;      // KB сейчас
-    doc["heap_min"] = esp_get_minimum_free_heap_size() / 1024; // KB минимум с старта
+    doc["heap"]     = esp_get_free_heap_size() / 1024;
+    doc["heap_min"] = esp_get_minimum_free_heap_size() / 1024;
     doc["uptime"]   = millis() / 1000;
     // WiFi: IP / статус
     if (wifiMgr.connected())
@@ -523,7 +539,11 @@ void setup() {
     String customName = (String)db[kk::device_name];
     customName.trim();
     String bleName = customName.isEmpty() ? String("Sensor-") + deviceId : customName;
-    bleCfg.begin(bleName.c_str(), onBleCommand);
+    bleCfg.begin(bleName.c_str(), onBleCommand, [](NimBLEServer* srv) {
+        NimBLEService* otaSvc = bleOta.createService(srv);
+        otaSvc->start();
+        Serial.println("[OTA] BLE OTA сервис запущен");
+    });
     bleCfg.updateSettings(buildSettingsJson());
 
     // WiFi — колбэки регистрируем всегда, запускаем только если включён
@@ -566,6 +586,7 @@ static unsigned long timerStatus = 0;
 void loop() {
     delay(1);
 
+    bleOta.loop();   // отложенная перезагрузка после OTA
     wifiMgr.tick();
 
     unsigned long now = millis();

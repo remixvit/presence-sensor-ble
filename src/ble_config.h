@@ -24,7 +24,12 @@ using BleCommandCb = std::function<void(const String& json)>;
 
 class BleConfig {
 public:
-    void begin(const char* deviceName, BleCommandCb commandCb) {
+    // extraSetup вызывается после создания сервера, до старта рекламы.
+    // Используется для регистрации дополнительных сервисов (например OTA).
+    using ExtraSetupCb = std::function<void(NimBLEServer*)>;
+
+    void begin(const char* deviceName, BleCommandCb commandCb,
+               ExtraSetupCb extraSetup = nullptr) {
         _commandCb = commandCb;
 
         NimBLEDevice::init(deviceName);
@@ -55,6 +60,9 @@ public:
         _commandChar->setCallbacks(&_cmdCb);
 
         svc->start();
+
+        // Дополнительные сервисы (OTA и др.) — до старта рекламы
+        if (extraSetup) extraSetup(_server);
 
         NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
         adv->addServiceUUID(BLE_SVC_UUID);
