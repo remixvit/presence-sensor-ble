@@ -12,37 +12,36 @@ enum class MoveDir : uint8_t {
 };
 
 // ============================================================
-//  DoorLogic
+//  Активатор двери
 //
-//  Вызывать update() раз в секунду с текущими данными.
-//  Управляет DOOR_OPEN_PIN через digitalWrite.
+//  Независим от VL53L1X (Безопасность — отдельный сигнал).
+//
+//  Логика:
+//    HIGH — объект приближается И в пределах openDist
+//    LOW  — объект стоит или удаляется, после closeDelay мс
 // ============================================================
 class DoorLogic {
 public:
-    // openPin  — GPIO на оптопару "открыть дверь"
-    void begin(uint8_t openPin) {
-        _pin = openPin;
+    void begin(uint8_t activatorPin) {
+        _pin = activatorPin;
     }
 
-    // Вызывать раз в секунду (в таймере 1000мс)
+    // Вызывать раз в секунду.
     // movingDist    — расстояние до движущегося объекта (см), 0 если нет
-    // presence      — есть ли объект вообще (LD2410C)
-    // zoneBlocked   — человек в проёме (VL53L1X)
+    // presence      — есть ли объект (LD2410)
     // approachDelta — порог изменения дистанции для "приближения" (см/сек)
-    // openDist      — макс. дистанция при которой открывать (см)
-    // closeDelay    — задержка закрытия после освобождения проёма (мс)
-    void update(uint16_t movingDist, bool presence, bool zoneBlocked,
+    // openDist      — макс. дистанция при которой активировать (см)
+    // closeDelay    — задержка деактивации (мс) после прекращения приближения
+    void update(uint16_t movingDist, bool presence,
                 uint16_t approachDelta, uint16_t openDist, uint32_t closeDelay)
     {
         // ── Определяем направление ──────────────────────────
         if (!presence || movingDist == 0) {
             _dir = MoveDir::Unknown;
         } else if (_prevDist == 0) {
-            _dir = MoveDir::Unknown;       // первый замер, базы нет
+            _dir = MoveDir::Unknown;
         } else {
             int16_t delta = (int16_t)_prevDist - (int16_t)movingDist;
-            // delta > 0  → dist уменьшилась → приближается
-            // delta < 0  → dist увеличилась → удаляется
             if (delta >= (int16_t)approachDelta) {
                 _dir = MoveDir::Approaching;
             } else if (delta <= -(int16_t)approachDelta) {
@@ -53,31 +52,27 @@ public:
         }
         _prevDist = movingDist;
 
-        // ── Управление дверью ────────────────────────────────
-        bool shouldOpen = (_dir == MoveDir::Approaching)
-                          && presence
-                          && (movingDist > 0)
-                          && (movingDist <= openDist);
+        // ── Активатор: HIGH при приближении ─────────────────
+        bool shouldActivate = (_dir == MoveDir::Approaching)
+                              && (movingDist > 0)
+                              && (movingDist <= openDist);
 
-        if (shouldOpen) {
-            _openDoor();
-            _closeTimerActive = false;
-        } else if (_doorOpen) {
-            if (zoneBlocked) {
-                // человек в проёме — держим открытой
-                _closeTimerActive = false;
-            } else if (!_closeTimerActive) {
-                // проём освободился — запускаем таймер закрытия
+        if (shouldActivate) {
+            if (!_activated) _activate();
+            _closeTimerActive = false;  // пока приближается — таймер не идёт
+        } else if (_activated) {
+            // Объект стоит или удаляется — запускаем таймер
+            if (!_closeTimerActive) {
                 _closeTimer = millis();
                 _closeTimerActive = true;
             } else if (millis() - _closeTimer >= closeDelay) {
-                _closeDoor();
+                _deactivate();
             }
         }
     }
 
-    MoveDir direction()  const { return _dir; }
-    bool    isDoorOpen() const { return _doorOpen; }
+    MoveDir direction()    const { return _dir; }
+    bool    isActivated()  const { return _activated; }
 
     const char* directionStr() const {
         switch (_dir) {
@@ -92,24 +87,20 @@ private:
     uint8_t  _pin = 0;
     uint16_t _prevDist = 0;
     MoveDir  _dir = MoveDir::Unknown;
-    bool     _doorOpen = false;
+    bool     _activated = false;
     bool     _closeTimerActive = false;
     unsigned long _closeTimer = 0;
 
-    void _openDoor() {
-        if (!_doorOpen) {
-            _doorOpen = true;
-            digitalWrite(_pin, HIGH);
-            Serial.println("[DOOR] Открыть");
-        }
+    void _activate() {
+        _activated = true;
+        digitalWrite(_pin, HIGH);
+        Serial.println("[ACT] ВКЛ — объект приближается");
     }
 
-    void _closeDoor() {
-        if (_doorOpen) {
-            _doorOpen = false;
-            _closeTimerActive = false;
-            digitalWrite(_pin, LOW);
-            Serial.println("[DOOR] Закрыть");
-        }
+    void _deactivate() {
+        _activated = false;
+        _closeTimerActive = false;
+        digitalWrite(_pin, LOW);
+        Serial.println("[ACT] ВЫКЛ");
     }
 };

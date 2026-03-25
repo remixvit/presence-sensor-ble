@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Presence Sensor BLE</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 16px; }
+  h1 { color: #00d4ff; margin-bottom: 16px; font-size: 18px; }
+
+  .card { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+  .card h2 { color: #00d4ff; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid #0f3460; }
+  .row:last-child { border-bottom: none; }
+  .label { color: #888; font-size: 12px; }
+  .value { color: #fff; font-size: 13px; font-weight: bold; }
+  .value.ok   { color: #4cff91; }
+  .value.err  { color: #ff4c4c; }
+  .value.warn { color: #ffd700; }
+
+  .door-open  { color: #4cff91; }
+  .door-close { color: #ff4c4c; }
+
+  button { background: #0f3460; color: #00d4ff; border: 1px solid #00d4ff; border-radius: 6px;
+           padding: 8px 20px; cursor: pointer; font-family: monospace; font-size: 13px; transition: all .2s; }
+  button:hover { background: #00d4ff; color: #1a1a2e; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #888; }
+  .status-dot.connected { background: #4cff91; box-shadow: 0 0 6px #4cff91; }
+  .status-dot.disconnected { background: #ff4c4c; }
+
+  input[type=text], input[type=number], input[type=password] {
+    background: #0f3460; border: 1px solid #00d4ff55; border-radius: 4px;
+    color: #fff; font-family: monospace; font-size: 12px;
+    padding: 4px 8px; width: 160px;
+  }
+  input:focus { outline: none; border-color: #00d4ff; }
+
+  .setting-row { display: flex; justify-content: space-between; align-items: center;
+                 padding: 6px 0; border-bottom: 1px solid #0f346055; }
+  .setting-row:last-child { border-bottom: none; }
+  .setting-label { color: #aaa; font-size: 12px; flex: 1; }
+  .send-btn { background: transparent; border: 1px solid #00d4ff55; color: #00d4ff;
+              padding: 2px 10px; font-size: 11px; margin-left: 6px; }
+  .send-btn:hover { background: #00d4ff22; }
+
+  #log { background: #0d0d1a; border: 1px solid #0f3460; border-radius: 6px;
+         padding: 10px; font-size: 11px; color: #888; height: 100px; overflow-y: auto; }
+  #log .l-info { color: #00d4ff; }
+  #log .l-ok   { color: #4cff91; }
+  #log .l-err  { color: #ff4c4c; }
+</style>
+</head>
+<body>
+
+<h1>&#x1F4E1; Presence Sensor BLE</h1>
+
+<!-- Подключение -->
+<div class="card">
+  <div style="display:flex; align-items:center; gap:12px;">
+    <span class="status-dot disconnected" id="dot"></span>
+    <span id="conn-label" style="flex:1; font-size:13px;">Не подключён</span>
+    <button id="btn-connect" onclick="toggleConnect()">Подключить</button>
+  </div>
+</div>
+
+<!-- Статус сенсора -->
+<div class="card">
+  <h2>Статус</h2>
+  <div class="row"><span class="label">Активатор</span>    <span class="value" id="s-door">—</span></div>
+  <div class="row"><span class="label">Направление</span>  <span class="value" id="s-moving">—</span></div>
+  <div class="row"><span class="label">LD2410 дист.</span> <span class="value" id="s-dist">—</span></div>
+  <div class="row"><span class="label">Безопасность</span> <span class="value" id="s-vl53">—</span></div>
+  <div class="row"><span class="label">WiFi</span>         <span class="value" id="s-wifi">—</span></div>
+  <div class="row"><span class="label">MQTT</span>         <span class="value" id="s-mqtt">—</span></div>
+  <div class="row"><span class="label">Uptime</span>       <span class="value" id="s-uptime">—</span></div>
+</div>
+
+<!-- Настройки -->
+<div class="card">
+  <h2>Настройки</h2>
+  <div id="settings-container">
+    <div style="color:#555; font-size:12px;">Подключитесь чтобы загрузить настройки</div>
+  </div>
+</div>
+
+<!-- Лог -->
+<div class="card">
+  <h2>Лог</h2>
+  <div id="log"></div>
+</div>
+
+<script>
+const SVC      = '0000181a-0000-1000-8000-00805f9b34fb';
+const UUID_ST  = '00002a6e-0000-1000-8000-00805f9b34fb'; // status NOTIFY
+const UUID_SET = '00002a6f-0000-1000-8000-00805f9b34fb'; // settings READ
+const UUID_CMD = '00002a70-0000-1000-8000-00805f9b34fb'; // command WRITE
+
+let device, server, cmdChar, setChar;
+let connected = false;
+
+function log(msg, cls='l-info') {
+  const el = document.getElementById('log');
+  const t = new Date().toLocaleTimeString();
+  el.innerHTML += `<div class="${cls}">[${t}] ${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function toggleConnect() {
+  if (connected) { device && device.gatt.disconnect(); return; }
+  try {
+    log('Поиск устройств...');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SVC] }],
+      optionalServices: [SVC]
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnect);
+    log(`Найден: ${device.name}`, 'l-ok');
+
+    server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+
+    // Status NOTIFY
+    const stChar = await svc.getCharacteristic(UUID_ST);
+    await stChar.startNotifications();
+    stChar.addEventListener('characteristicvaluechanged', onStatus);
+
+    // Settings READ
+    setChar = await svc.getCharacteristic(UUID_SET);
+    await loadSettings();
+
+    // Command WRITE
+    cmdChar = await svc.getCharacteristic(UUID_CMD);
+
+    connected = true;
+    document.getElementById('dot').className = 'status-dot connected';
+    document.getElementById('conn-label').textContent = device.name;
+    document.getElementById('btn-connect').textContent = 'Отключить';
+    log('Подключён!', 'l-ok');
+  } catch(e) {
+    log('Ошибка: ' + e.message, 'l-err');
+  }
+}
+
+function onDisconnect() {
+  connected = false;
+  document.getElementById('dot').className = 'status-dot disconnected';
+  document.getElementById('conn-label').textContent = 'Отключён';
+  document.getElementById('btn-connect').textContent = 'Подключить';
+  log('Соединение потеряно', 'l-err');
+}
+
+function onStatus(e) {
+  try {
+    const json = new TextDecoder().decode(e.target.value);
+    const d = JSON.parse(json);
+    const set = (id, val, cls) => {
+      const el = document.getElementById(id);
+      el.textContent = val;
+      el.className = 'value ' + (cls || '');
+    };
+    set('s-door',   d.activator === 'on' ? 'HIGH — активен' : 'LOW — ожидание',
+                    d.activator === 'on' ? 'ok' : '');
+    const dirClass = d.dir === 'приближается' ? 'ok' : d.dir === 'удаляется' ? 'warn' : '';
+    set('s-moving', d.dir || '—', dirClass);
+    set('s-dist',   d.dist !== undefined ? d.dist + ' см' : '—');
+    set('s-vl53',   d.safety ? 'ЗАНЯТО' : 'свободно', d.safety ? 'warn' : 'ok');
+    const wifiOk = d.wifi && d.wifi.match(/^\d+\.\d+/);
+    set('s-wifi', d.wifi || '—', wifiOk ? 'ok' : d.wifi === 'подключение...' ? 'warn' : 'err');
+    const mqttOk = d.mqtt === 'подключён';
+    set('s-mqtt', d.mqtt || '—', mqttOk ? 'ok' : d.mqtt === 'выключен' ? '' : 'err');
+    set('s-uptime', d.uptime !== undefined ? fmtUptime(d.uptime) : '—');
+  } catch(e) { log('Ошибка парсинга статуса: ' + e.message, 'l-err'); }
+}
+
+async function loadSettings() {
+  try {
+    const val = await setChar.readValue();
+    const json = new TextDecoder().decode(val);
+    const settings = JSON.parse(json);
+    renderSettings(settings);
+    log('Настройки загружены', 'l-ok');
+  } catch(e) { log('Ошибка чтения настроек: ' + e.message, 'l-err'); }
+}
+
+const settingsMeta = {
+  device_name:         { label: 'Имя устройства',     type: 'text' },
+  wifi_enabled:        { label: 'WiFi включён',      type: 'bool' },
+  wifi_ssid:           { label: 'WiFi SSID',          type: 'text' },
+  wifi_pass:           { label: 'WiFi пароль',        type: 'password' },
+  mqtt_enabled:        { label: 'MQTT включён',       type: 'bool' },
+  mqtt_broker:         { label: 'MQTT брокер',        type: 'text' },
+  mqtt_port:           { label: 'MQTT порт',          type: 'number' },
+  mqtt_user:           { label: 'MQTT логин',         type: 'text' },
+  mqtt_pass:           { label: 'MQTT пароль',        type: 'password' },
+  pub_interval:        { label: 'Интервал публ. мс',  type: 'number' },
+  sensor_maxdist:      { label: 'Макс. дистанция мм', type: 'number' },
+  vl53_threshold:      { label: 'VL53 порог мм',      type: 'number' },
+  door_approach_delta: { label: 'Дельта подхода мм',  type: 'number' },
+  door_open_dist:      { label: 'Дист. открытия мм',  type: 'number' },
+  door_close_delay:    { label: 'Задержка закрытия мс', type: 'number' },
+};
+
+function renderSettings(settings) {
+  const container = document.getElementById('settings-container');
+  container.innerHTML = '';
+  for (const [key, meta] of Object.entries(settingsMeta)) {
+    if (!(key in settings)) continue;
+    const row = document.createElement('div');
+    row.className = 'setting-row';
+    let inputHtml;
+    if (meta.type === 'bool') {
+      const checked = settings[key] ? 'checked' : '';
+      inputHtml = `<input type="checkbox" id="s_${key}" ${checked} style="width:auto;">`;
+    } else {
+      inputHtml = `<input type="${meta.type}" id="s_${key}" value="${settings[key]}">`;
+    }
+    row.innerHTML = `
+      <span class="setting-label">${meta.label}</span>
+      ${inputHtml}
+      <button class="send-btn" onclick="sendSetting('${key}','${meta.type}')">&#x2713;</button>
+    `;
+    container.appendChild(row);
+  }
+  // Кнопка обновить
+  const btn = document.createElement('button');
+  btn.textContent = 'Обновить';
+  btn.style.marginTop = '10px';
+  btn.style.fontSize = '12px';
+  btn.onclick = loadSettings;
+  container.appendChild(btn);
+}
+
+async function sendSetting(key, type) {
+  if (!cmdChar) { log('Нет подключения', 'l-err'); return; }
+  const el = document.getElementById('s_' + key);
+  let value;
+  if (type === 'bool') value = el.checked;
+  else if (type === 'number') value = Number(el.value);
+  else value = el.value;
+  // Не отправляем пустой пароль — значит пользователь не менял его
+  if (type === 'password' && value === '') {
+    log(`${key}: пустое значение пропущено`, 'l-info'); return;
+  }
+
+  const cmd = {}; cmd[key] = value;
+  const json = JSON.stringify(cmd);
+  try {
+    await cmdChar.writeValueWithResponse(new TextEncoder().encode(json));
+    log(`Отправлено: ${key} = ${value}`, 'l-ok');
+  } catch(e) { log('Ошибка записи: ' + e.message, 'l-err'); }
+}
+
+function fmtUptime(ms) {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  if (h > 0) return `${h}ч ${m%60}м`;
+  if (m > 0) return `${m}м ${s%60}с`;
+  return `${s}с`;
+}
+</script>
+</body>
+</html>

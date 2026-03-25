@@ -89,9 +89,16 @@ void publishDiscovery() {
     char cfgTopic[120];
     JsonDocument doc;
 
+    // Имя устройства: кастомное или дефолтное
+    String devCustomName = (String)db[kk::device_name];
+    devCustomName.trim();
+    String devDisplayName = devCustomName.isEmpty()
+        ? String("Sensor ") + deviceId
+        : devCustomName;
+
     auto makeDevice = [&]() {
         doc["device"]["ids"][0]  = deviceId;
-        doc["device"]["name"]    = String("Presence ") + deviceId;
+        doc["device"]["name"]    = devDisplayName;
         doc["device"]["model"]   = "ESP32-C3 + LD2410C";
         doc["device"]["mf"]      = "DIY";
         doc["avty_t"]            = topicAvail;
@@ -103,56 +110,86 @@ void publishDiscovery() {
         serializeJson(doc, payload);
         mqttClient.publish(topic, payload.c_str(), true);
         doc.clear();
+        delay(20); // небольшая пауза между discovery-пакетами
     };
 
     // Присутствие
-    snprintf(cfgTopic, sizeof(cfgTopic),
-        "homeassistant/binary_sensor/%s/presence/config", deviceId);
+    snprintf(cfgTopic, sizeof(cfgTopic), "homeassistant/binary_sensor/%s/presence/config", deviceId);
     makeDevice();
-    doc["name"]       = "Presence";
-    doc["uniq_id"]    = String(deviceId) + "_presence";
-    doc["stat_t"]     = topicState;
-    doc["val_tpl"]    = "{{ value_json.presence }}";
-    doc["payload_on"] = "true";
-    doc["payload_off"]= "false";
-    doc["dev_cla"]    = "occupancy";
+    doc["name"]        = "Presence";
+    doc["uniq_id"]     = String(deviceId) + "_presence";
+    doc["stat_t"]      = topicState;
+    doc["val_tpl"]     = "{{ 'on' if value_json.presence else 'off' }}";
+    doc["payload_on"]  = "on";
+    doc["payload_off"] = "off";
+    doc["dev_cla"]     = "occupancy";
+    publish(cfgTopic);
+
+    // Активатор (сигнал открытия)
+    snprintf(cfgTopic, sizeof(cfgTopic), "homeassistant/binary_sensor/%s/activator/config", deviceId);
+    makeDevice();
+    doc["name"]        = "Activator";
+    doc["uniq_id"]     = String(deviceId) + "_activator";
+    doc["stat_t"]      = topicState;
+    doc["val_tpl"]     = "{{ value_json.activator }}";
+    doc["payload_on"]  = "on";
+    doc["payload_off"] = "off";
+    doc["dev_cla"]     = "opening";
+    publish(cfgTopic);
+
+    // Безопасность (VL53L1X зона)
+    snprintf(cfgTopic, sizeof(cfgTopic), "homeassistant/binary_sensor/%s/safety/config", deviceId);
+    makeDevice();
+    doc["name"]        = "Safety Zone";
+    doc["uniq_id"]     = String(deviceId) + "_safety";
+    doc["stat_t"]      = topicState;
+    doc["val_tpl"]     = "{{ 'on' if value_json.safety else 'off' }}";
+    doc["payload_on"]  = "on";
+    doc["payload_off"] = "off";
+    doc["dev_cla"]     = "occupancy";
     publish(cfgTopic);
 
     // Расстояние
-    snprintf(cfgTopic, sizeof(cfgTopic),
-        "homeassistant/sensor/%s/distance/config", deviceId);
+    snprintf(cfgTopic, sizeof(cfgTopic), "homeassistant/sensor/%s/distance/config", deviceId);
     makeDevice();
-    doc["name"]     = "Distance";
-    doc["uniq_id"]  = String(deviceId) + "_dist";
-    doc["stat_t"]   = topicState;
-    doc["val_tpl"]  = "{{ value_json.dist }}";
+    doc["name"]                = "Distance";
+    doc["uniq_id"]             = String(deviceId) + "_dist";
+    doc["stat_t"]              = topicState;
+    doc["val_tpl"]             = "{{ value_json.dist }}";
     doc["unit_of_measurement"] = "cm";
-    doc["dev_cla"]  = "distance";
+    doc["dev_cla"]             = "distance";
+    publish(cfgTopic);
+
+    // Направление
+    snprintf(cfgTopic, sizeof(cfgTopic), "homeassistant/sensor/%s/direction/config", deviceId);
+    makeDevice();
+    doc["name"]     = "Direction";
+    doc["uniq_id"]  = String(deviceId) + "_dir";
+    doc["stat_t"]   = topicState;
+    doc["val_tpl"]  = "{{ value_json.dir }}";
     publish(cfgTopic);
 }
 
 void publishState() {
     JsonDocument doc;
-    doc["state"]    = "online";
-    doc["presence"] = snap.presence;
-    doc["dist"]     = snap.movingDist ? snap.movingDist : snap.staticDist;
-    doc["moving"]   = snap.isMoving;
-    doc["static"]   = snap.isStatic;
-    doc["energy"]   = snap.movingEnergy;
-    doc["dir"]      = snap.moveDir;
-    doc["door"]     = snap.doorOpen;
-    doc["vl53"]     = snap.vl53dist;
-    doc["zone"]     = snap.zoneBlocked;
+    doc["state"]     = "online";
+    doc["presence"]  = snap.presence;
+    doc["dist"]      = snap.movingDist ? snap.movingDist : snap.staticDist;
+    doc["activator"] = snap.doorOpen ? "on" : "off";
+    doc["safety"]    = snap.zoneBlocked;
+    doc["dir"]       = door.directionStr();
     String payload;
     serializeJson(doc, payload);
     mqttClient.publish(topicState, payload.c_str());
 }
+
 
 bool connectMQTT() {
     String broker = (String)db[kk::mqtt_broker];
     if (broker.isEmpty()) return false;
 
     mqttClient.setServer(broker.c_str(), (int)db[kk::mqtt_port]);
+    mqttClient.setBufferSize(1024);
     mqttClient.setSocketTimeout(3);
     mqttClient.setKeepAlive(10);
 
@@ -182,12 +219,15 @@ bool connectMQTT() {
 String buildSettingsJson() {
     JsonDocument doc;
     doc["device_id"]          = deviceId;
+    doc["device_name"]        = (String)db[kk::device_name];
     doc["wifi_enabled"]       = (bool)db[kk::wifi_enabled];
     doc["wifi_ssid"]          = (String)db[kk::wifi_ssid];
+    doc["wifi_pass"]          = "";   // не раскрываем, но поле должно быть в UI
     doc["mqtt_enabled"]       = (bool)db[kk::mqtt_enabled];
     doc["mqtt_broker"]        = (String)db[kk::mqtt_broker];
     doc["mqtt_port"]          = (int)db[kk::mqtt_port];
     doc["mqtt_user"]          = (String)db[kk::mqtt_user];
+    doc["mqtt_pass"]          = "";   // не раскрываем
     doc["pub_interval"]       = (int)db[kk::pub_interval];
     doc["sensor_maxdist"]     = (int)db[kk::sensor_maxdist];
     doc["vl53_threshold"]     = (int)db[kk::vl53_threshold];
@@ -212,14 +252,29 @@ String buildStatusJson() {
     doc["dist"]     = snap.movingDist ? snap.movingDist : snap.staticDist;
     doc["moving"]   = snap.isMoving;
     doc["energy"]   = snap.movingEnergy;
-    doc["dir"]      = snap.moveDir;
-    doc["door"]     = snap.doorOpen;
-    doc["zone"]     = snap.zoneBlocked;
+    doc["dir"]      = door.directionStr();
+    doc["activator"] = snap.doorOpen ? "on" : "off";
+    doc["safety"]    = snap.zoneBlocked;
     doc["vl53"]     = snap.vl53dist;
     doc["ld_ok"]    = !ld2410Failed;
     doc["vl53_ok"]  = vl53ok && !vl53Failed;
-    doc["wifi"]     = wifiMgr.connected();
-    doc["mqtt"]     = mqttClient.connected();
+    // WiFi: IP / статус
+    if (wifiMgr.connected())
+        doc["wifi"] = WiFi.localIP().toString();
+    else if (wifiMgr.connecting())
+        doc["wifi"] = "подключение...";
+    else if ((bool)db[kk::wifi_enabled])
+        doc["wifi"] = "ошибка";
+    else
+        doc["wifi"] = "выключен";
+
+    // MQTT: статус + код ошибки
+    if (mqttClient.connected())
+        doc["mqtt"] = "подключён";
+    else if (!wifiMgr.connected() || !(bool)db[kk::mqtt_enabled])
+        doc["mqtt"] = "выключен";
+    else
+        doc["mqtt"] = String("ошибка: ") + mqttClient.state();
     String out;
     serializeJson(doc, out);
     return out;
@@ -244,7 +299,8 @@ void onBleCommand(const String& json) {
     for (JsonPair kv : doc.as<JsonObject>()) {
         String key = kv.key().c_str();
 
-        if      (key == "device_id")           { db[kk::device_id]           = kv.value().as<String>(); changed = true; }
+        if      (key == "device_id")            { db[kk::device_id]            = kv.value().as<String>(); changed = true; }
+        else if (key == "device_name")          { db[kk::device_name]          = kv.value().as<String>(); changed = true; }
         else if (key == "wifi_enabled")         { db[kk::wifi_enabled]         = kv.value().as<bool>();   wifiChanged = true; changed = true; }
         else if (key == "wifi_ssid")            { db[kk::wifi_ssid]            = kv.value().as<String>(); wifiChanged = true; changed = true; }
         else if (key == "wifi_pass")            { db[kk::wifi_pass]            = kv.value().as<String>(); wifiChanged = true; changed = true; }
@@ -264,6 +320,12 @@ void onBleCommand(const String& json) {
     if (changed) {
         db.update();
         setupIds();
+        // Если поменялось имя — применяем сразу в BLE-рекламе
+        if (doc.containsKey("device_name")) {
+            String n = (String)db[kk::device_name]; n.trim();
+            String newName = n.isEmpty() ? String("Sensor-") + deviceId : n;
+            bleCfg.setName(newName.c_str());
+        }
         bleCfg.updateSettings(buildSettingsJson());
     }
 
@@ -301,9 +363,7 @@ void sensorTask(void*) {
 
         // ── LD2410 ──────────────────────────────────────────
         if (sensor.update()) {
-            if (sensor.data().presence()) lastLd2410Frame = millis();
-            else if (sensor.data().movingDist > 0 || sensor.data().staticDist > 0)
-                lastLd2410Frame = millis();
+            lastLd2410Frame = millis();  // любой фрейм — датчик жив
         }
 
         if (!ld2410Failed && millis() - lastLd2410Frame > 3000) {
@@ -351,17 +411,14 @@ void sensorTask(void*) {
         if (millis() - lastDoorUpdate >= 1000) {
             lastDoorUpdate = millis();
             const LD2410Data& d = sensor.data();
-            uint32_t safeDelay = cfg_closeDelay;
-            if (vl53Failed && safeDelay < 1500) safeDelay = 1500;
             door.update(
                 ld2410Failed ? 0     : d.movingDist,
                 ld2410Failed ? false : d.presence(),
-                snap.zoneBlocked,
                 cfg_approachDelta,
                 cfg_openDist,
-                safeDelay
+                cfg_closeDelay
             );
-            snap.doorOpen = door.isDoorOpen();
+            snap.doorOpen = door.isActivated();
             snap.moveDir  = (uint8_t)door.direction();
         }
 
@@ -407,6 +464,7 @@ void setup() {
 
     // Дефолтные значения
     db.init(kk::device_id,           (String)"");
+    db.init(kk::device_name,         (String)"");
     db.init(kk::wifi_enabled,        (bool)false);
     db.init(kk::wifi_ssid,           (String)"");
     db.init(kk::wifi_pass,           (String)"");
@@ -458,43 +516,36 @@ void setup() {
         LD2410_RX_PIN, LD2410_TX_PIN, LD2410_OUT_PIN);
 
     // BLE
-    String bleName = String("Sensor-") + deviceId;
+    String customName = (String)db[kk::device_name];
+    customName.trim();
+    String bleName = customName.isEmpty() ? String("Sensor-") + deviceId : customName;
     bleCfg.begin(bleName.c_str(), onBleCommand);
     bleCfg.updateSettings(buildSettingsJson());
 
-    // WiFi (только если включён в настройках)
-    if ((bool)db[kk::wifi_enabled]) {
-        WiFi.onEvent([](WiFiEvent_t ev, WiFiEventInfo_t info) {
-            wifiMgr.notifyEvent(ev, info);
-        });
+    // WiFi — колбэки регистрируем всегда, запускаем только если включён
+    WiFi.onEvent([](WiFiEvent_t ev, WiFiEventInfo_t info) {
+        wifiMgr.notifyEvent(ev, info);
+    });
 
-        wifiMgr.setTxPower(WIFI_POWER_11dBm);
-        wifiMgr.setTimeout(20);
-        wifiMgr.setMaxRetries(3);
-        wifiMgr.onConnect([]() {
-            setupIds();
-            if ((bool)db[kk::mqtt_enabled]) mqttNeedsConnect = true;
-            bleCfg.updateSettings(buildSettingsJson());
-        });
-        wifiMgr.onDisconnect([]() {
-            if (mqttClient.connected()) mqttClient.disconnect();
-        });
-        wifiMgr.onError([](const char* reason) {
-            Serial.printf("[WiFi] Ошибка: %s\n", reason);
-        });
+    wifiMgr.setTxPower(WIFI_POWER_11dBm);
+    wifiMgr.setTimeout(20);
+    wifiMgr.setMaxRetries(3);
+    wifiMgr.onConnect([]() {
+        setupIds();
+        if ((bool)db[kk::mqtt_enabled]) mqttNeedsConnect = true;
+        bleCfg.updateSettings(buildSettingsJson());
+    });
+    wifiMgr.onDisconnect([]() {
+        if (mqttClient.connected()) mqttClient.disconnect();
+    });
+    wifiMgr.onError([](const char* reason) {
+        Serial.printf("[WiFi] Ошибка: %s\n", reason);
+    });
+
+    if ((bool)db[kk::wifi_enabled]) {
         wifiMgr.begin((String)db[kk::wifi_ssid], (String)db[kk::wifi_pass]);
     } else {
         Serial.println("[WiFi] Отключён (wifi_enabled=false)");
-    }
-
-    // Watchdog
-    {
-        const esp_task_wdt_config_t wdt = {
-            .timeout_ms   = 5000,
-            .idle_core_mask = 0,
-            .trigger_panic  = true
-        };
-        esp_task_wdt_reconfigure(&wdt);
     }
 
     // Sensor task — приоритет 5

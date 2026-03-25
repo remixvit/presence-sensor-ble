@@ -5,6 +5,7 @@
 DB_KEYS(kk,
     // Устройство
     device_id,
+    device_name,   // произвольное имя для BLE (отображается в пикере)
 
     // WiFi
     wifi_enabled,

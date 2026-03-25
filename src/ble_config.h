@@ -54,8 +54,11 @@ public:
         );
         _commandChar->setCallbacks(&_cmdCb);
 
+        svc->start();
+
         NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
         adv->addServiceUUID(BLE_SVC_UUID);
+        adv->setName(deviceName);  // имя в advertisement, не только в scan response
         adv->enableScanResponse(true);
         adv->start();
 
@@ -76,6 +79,16 @@ public:
 
     bool connected() const {
         return _server && _server->getConnectedCount() > 0;
+    }
+
+    // Сменить имя устройства в BLE-рекламе (действует сразу)
+    void setName(const char* name) {
+        NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+        adv->stop();
+        NimBLEDevice::setDeviceName(name);
+        adv->setName(name);
+        adv->start();
+        Serial.printf("[BLE] Имя изменено: '%s'\n", name);
     }
 
     void setCommandCallback(BleCommandCb cb) { _commandCb = cb; }
